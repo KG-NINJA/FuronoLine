@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Taito Frontline Clone - Prototype</title>
+    <style>
+        /* Basic page styling */
+        html, body {
+            margin: 0;
+            height: 100%;
+            background-color: #000;
+            font-family: Arial, Helvetica, sans-serif;
+            color: #fff;
+        }
+
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        canvas {
+            border: 2px solid #fff;
+            background-color: #1a1a1a;
+        }
+
+        #message {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            font-size: 24px;
+            letter-spacing: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="message"></div>
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+
+    <script>
+        // ---------------------------------------------------------------------
+        // Canvas setup
+        // ---------------------------------------------------------------------
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const messageEl = document.getElementById('message');
+
+        // ---------------------------------------------------------------------
+        // Game objects and state
+        // ---------------------------------------------------------------------
+        const player = {
+            width: 24,
+            height: 24,
+            x: canvas.width / 2 - 12,
+            y: canvas.height - 60,
+            speed: 3
+        };
+
+        const enemy = {
+            width: 24,
+            height: 24,
+            x: canvas.width / 2 - 12,
+            y: 140,
+            speed: 1.5,
+            direction: 1,
+            patrolRange: 120,
+            alive: true,
+            originX: canvas.width / 2 - 12
+        };
+
+        const base = {
+            size: 40,
+            x: canvas.width / 2 - 20,
+            y: 40,
+            health: 5
+        };
+
+        const bullets = [];
+        const keys = {};
+        let lastShotTime = 0;
+        let stageClear = false;
+
+        // ---------------------------------------------------------------------
+        // Input handling
+        // ---------------------------------------------------------------------
+        window.addEventListener('keydown', (event) => {
+            keys[event.code] = true;
+        });
+
+        window.addEventListener('keyup', (event) => {
+            keys[event.code] = false;
+        });
+
+        // ---------------------------------------------------------------------
+        // Utility collision helpers
+        // ---------------------------------------------------------------------
+
+        /**
+         * Clamp value to a given min/max range.
+         */
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
+        }
+
+        /**
+         * Circle to rectangle collision detection.
+         */
+        function circleRectCollision(circle, rect) {
+            const closestX = clamp(circle.x, rect.x, rect.x + rect.width);
+            const closestY = clamp(circle.y, rect.y, rect.y + rect.height);
+            const dx = circle.x - closestX;
+            const dy = circle.y - closestY;
+            return dx * dx + dy * dy < circle.radius * circle.radius;
+        }
+
+        // ---------------------------------------------------------------------
+        // Game logic
+        // ---------------------------------------------------------------------
+        function update(deltaTime) {
+            if (stageClear) {
+                return;
+            }
+
+            handlePlayerMovement();
+            handleShooting(deltaTime);
+            updateBullets();
+            updateEnemy(deltaTime);
+            checkCollisions();
+
+            if (base.health <= 0) {
+                stageClear = true;
+                messageEl.textContent = 'Stage Clear';
+            }
+        }
+
+        function handlePlayerMovement() {
+            let dx = 0;
+            let dy = 0;
+
+            if (keys['KeyA']) dx -= 1;
+            if (keys['KeyD']) dx += 1;
+            if (keys['KeyW']) dy -= 1;
+            if (keys['KeyS']) dy += 1;
+
+            // Normalize diagonal movement
+            if (dx !== 0 && dy !== 0) {
+                dx *= Math.SQRT1_2;
+                dy *= Math.SQRT1_2;
+            }
+
+            player.x += dx * player.speed;
+            player.y += dy * player.speed;
+
+            // Keep player inside the canvas bounds
+            player.x = clamp(player.x, 0, canvas.width - player.width);
+            player.y = clamp(player.y, 0, canvas.height - player.height);
+        }
+
+        function handleShooting(deltaTime) {
+            const shootInterval = 250; // milliseconds between shots
+            if (keys['Space']) {
+                const now = performance.now();
+                if (now - lastShotTime > shootInterval) {
+                    bullets.push({
+                        x: player.x + player.width / 2,
+                        y: player.y,
+                        radius: 4,
+                        speed: 6
+                    });
+                    lastShotTime = now;
+                }
+            }
+        }
+
+        function updateBullets() {
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                bullets[i].y -= bullets[i].speed;
+                if (bullets[i].y + bullets[i].radius < 0) {
+                    bullets.splice(i, 1);
+                }
+            }
+        }
+
+        function updateEnemy(deltaTime) {
+            if (!enemy.alive) {
+                return;
+            }
+
+            enemy.x += enemy.speed * enemy.direction;
+
+            // Reverse direction when reaching patrol range limits
+            if (enemy.x <= enemy.originX - enemy.patrolRange ||
+                enemy.x + enemy.width >= enemy.originX + enemy.patrolRange) {
+                enemy.direction *= -1;
+            }
+        }
+
+        function checkCollisions() {
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const bullet = bullets[i];
+
+                // Bullet vs enemy
+                if (enemy.alive && circleRectCollision({
+                    x: bullet.x,
+                    y: bullet.y,
+                    radius: bullet.radius
+                }, {
+                    x: enemy.x,
+                    y: enemy.y,
+                    width: enemy.width,
+                    height: enemy.height
+                })) {
+                    enemy.alive = false;
+                    bullets.splice(i, 1);
+                    continue;
+                }
+
+                // Bullet vs base
+                if (circleRectCollision({
+                    x: bullet.x,
+                    y: bullet.y,
+                    radius: bullet.radius
+                }, {
+                    x: base.x,
+                    y: base.y,
+                    width: base.size,
+                    height: base.size
+                })) {
+                    base.health = Math.max(0, base.health - 1);
+                    bullets.splice(i, 1);
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // Rendering helpers
+        // ---------------------------------------------------------------------
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            drawBackground();
+            drawPlayer();
+            drawEnemy();
+            drawBase();
+            drawBullets();
+        }
+
+        function drawBackground() {
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function drawPlayer() {
+            ctx.fillStyle = '#4caf50';
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+        }
+
+        function drawEnemy() {
+            if (!enemy.alive) {
+                return;
+            }
+            ctx.fillStyle = '#f44336';
+            ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+        }
+
+        function drawBase() {
+            ctx.fillStyle = base.health > 0 ? '#ffc107' : '#555';
+            ctx.fillRect(base.x, base.y, base.size, base.size);
+
+            // Draw base health indicator as small segments
+            if (base.health > 0) {
+                ctx.fillStyle = '#fff';
+                const segmentWidth = base.size / base.health;
+                for (let i = 0; i < base.health; i++) {
+                    ctx.fillRect(base.x + i * segmentWidth + 1, base.y - 6, segmentWidth - 2, 4);
+                }
+            }
+        }
+
+        function drawBullets() {
+            ctx.fillStyle = '#fff';
+            bullets.forEach((bullet) => {
+                ctx.beginPath();
+                ctx.arc(bullet.x, bullet.y, bullet.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        // ---------------------------------------------------------------------
+        // Main game loop
+        // ---------------------------------------------------------------------
+        let lastTime = performance.now();
+
+        function gameLoop(currentTime) {
+            const deltaTime = currentTime - lastTime;
+            lastTime = currentTime;
+
+            update(deltaTime);
+            draw();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
