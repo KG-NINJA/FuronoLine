@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Taito Frontline Clone Prototype</title>
+    <style>
+        /* Center the canvas on a dark background */
+        html, body {
+            margin: 0;
+            height: 100%;
+            background: #000;
+            color: #fff;
+            font-family: 'Segoe UI', Arial, sans-serif;
+        }
+
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        canvas {
+            border: 2px solid #fff;
+            background: #111;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="480" height="640"></canvas>
+
+    <script>
+        'use strict';
+
+        // -------------------------------------------------------------
+        // Core setup
+        // -------------------------------------------------------------
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const keys = new Set();
+        let lastTime = 0;
+
+        const world = { width: canvas.width, height: 1500 };
+        const camera = { y: 0 };
+
+        let stageClear = false;
+        let gameOver = false;
+
+        // -------------------------------------------------------------
+        // Game object definitions
+        // -------------------------------------------------------------
+        const player = {
+            width: 28,
+            height: 32,
+            x: world.width / 2 - 14,
+            y: world.height - 100,
+            speed: 180,
+            fireCooldown: 160,
+            grenadeCooldown: 800,
+            lastShot: 0,
+            lastGrenade: 0,
+            health: 3,
+            invulnerable: 0
+        };
+
+        const bulletConfig = {
+            radius: 4,
+            speed: 360
+        };
+
+        const grenadeConfig = {
+            radius: 8,
+            gravity: 520,
+            fuse: 0.8,
+            explosionRadius: 72
+        };
+
+        const base = {
+            x: world.width / 2 - 26,
+            y: 80,
+            width: 52,
+            height: 52,
+            hp: 14,
+            alive: true
+        };
+
+        const tank = {
+            x: world.width / 2 - 30,
+            y: 220,
+            width: 60,
+            height: 40,
+            turretWidth: 10,
+            turretLength: 34,
+            alive: true
+        };
+
+        const armoredCar = {
+            x: 240,
+            y: world.height - 520,
+            width: 40,
+            height: 26,
+            speed: 140,
+            direction: 1,
+            patrolRange: { min: 180, max: world.width - 80 },
+            hp: 6,
+            alive: true
+        };
+
+        const infantry = [
+            {
+                x: 60,
+                y: world.height - 260,
+                width: 20,
+                height: 24,
+                speed: 60,
+                direction: 1,
+                patrolRange: { min: 40, max: 160 },
+                detectionRadius: 220,
+                shootInterval: 1.1,
+                fireTimer: 0,
+                alive: true
+            },
+            {
+                x: 320,
+                y: world.height - 360,
+                width: 20,
+                height: 24,
+                speed: 60,
+                direction: -1,
+                patrolRange: { min: 240, max: 360 },
+                detectionRadius: 220,
+                shootInterval: 0.9,
+                fireTimer: 0,
+                alive: true
+            },
+            {
+                x: 120,
+                y: 360,
+                width: 20,
+                height: 24,
+                speed: 50,
+                direction: 1,
+                patrolRange: { min: 80, max: 200 },
+                detectionRadius: 240,
+                shootInterval: 1.2,
+                fireTimer: 0,
+                alive: true
+            }
+        ];
+
+        const obstacles = [
+            { x: 60, y: world.height - 190, width: 160, height: 28 },
+            { x: world.width - 220, y: world.height - 420, width: 160, height: 28 },
+            { x: 40, y: world.height - 620, width: 120, height: 32 },
+            { x: 280, y: world.height - 760, width: 140, height: 28 },
+            { x: 40, y: 440, width: 140, height: 28 },
+            { x: world.width - 200, y: 320, width: 120, height: 28 },
+            { x: world.width / 2 - 80, y: 150, width: 160, height: 24 }
+        ];
+
+        const playerBullets = [];
+        const grenades = [];
+        const explosions = [];
+        const enemyBullets = [];
+
+        // -------------------------------------------------------------
+        // Input handling
+        // -------------------------------------------------------------
+        window.addEventListener('keydown', (event) => {
+            keys.add(event.code);
+        });
+
+        window.addEventListener('keyup', (event) => {
+            keys.delete(event.code);
+        });
+
+        // -------------------------------------------------------------
+        // Game loop
+        // -------------------------------------------------------------
+        function gameLoop(timestamp) {
+            const delta = (timestamp - lastTime) / 1000;
+            lastTime = timestamp;
+
+            update(delta, timestamp);
+            draw();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function init() {
+            requestAnimationFrame((timestamp) => {
+                lastTime = timestamp;
+                requestAnimationFrame(gameLoop);
+            });
+        }
+
+        // -------------------------------------------------------------
+        // Update logic
+        // -------------------------------------------------------------
+        function update(delta, timestamp) {
+            if (stageClear || gameOver) {
+                return;
+            }
+
+            if (player.invulnerable > 0) {
+                player.invulnerable = Math.max(0, player.invulnerable - delta);
+            }
+
+            handlePlayerMovement(delta);
+            handlePlayerShooting(timestamp);
+            handleGrenadeThrow(timestamp);
+            updateCamera();
+
+            updatePlayerBullets(delta);
+            updateGrenades(delta);
+            updateExplosions(delta);
+            updateInfantry(delta, timestamp);
+            updateArmoredCar(delta);
+            updateEnemyBullets(delta);
+            checkStageState();
+        }
+
+        function handlePlayerMovement(delta) {
+            let moveX = 0;
+            let moveY = 0;
+
+            if (keys.has('KeyA') || keys.has('ArrowLeft')) moveX -= 1;
+            if (keys.has('KeyD') || keys.has('ArrowRight')) moveX += 1;
+            if (keys.has('KeyW') || keys.has('ArrowUp')) moveY -= 1;
+            if (keys.has('KeyS') || keys.has('ArrowDown')) moveY += 1;
+
+            if (moveX !== 0 && moveY !== 0) {
+                const inv = Math.SQRT1_2;
+                moveX *= inv;
+                moveY *= inv;
+            }
+
+            attemptMove(player, moveX * player.speed * delta, moveY * player.speed * delta);
+        }
+
+        function attemptMove(rect, dx, dy) {
+            if (dx !== 0) {
+                const next = { x: rect.x + dx, y: rect.y, width: rect.width, height: rect.height };
+                if (!collidesWithObstacles(next)) {
+                    rect.x = clamp(next.x, 0, world.width - rect.width);
+                }
+            }
+
+            if (dy !== 0) {
+                const next = { x: rect.x, y: rect.y + dy, width: rect.width, height: rect.height };
+                if (!collidesWithObstacles(next)) {
+                    rect.y = clamp(next.y, 0, world.height - rect.height);
+                }
+            }
+        }
+
+        function handlePlayerShooting(timestamp) {
+            const canShoot = timestamp - player.lastShot >= player.fireCooldown;
+            if ((keys.has('Space') || keys.has('KeyJ')) && canShoot) {
+                playerBullets.push({
+                    x: player.x + player.width / 2,
+                    y: player.y + 4,
+                    radius: bulletConfig.radius,
+                    vx: 0,
+                    vy: -bulletConfig.speed
+                });
+                player.lastShot = timestamp;
+            }
+        }
+
+        function handleGrenadeThrow(timestamp) {
+            const canThrow = timestamp - player.lastGrenade >= player.grenadeCooldown;
+            if (keys.has('KeyG') && canThrow) {
+                grenades.push({
+                    x: player.x + player.width / 2,
+                    y: player.y,
+                    vx: 0,
+                    vy: -260,
+                    radius: grenadeConfig.radius,
+                    fuse: grenadeConfig.fuse,
+                    grounded: false
+                });
+                player.lastGrenade = timestamp;
+            }
+        }
+
+        function updateCamera() {
+            const target = player.y - canvas.height * 0.5 + player.height * 0.5;
+            camera.y = clamp(target, 0, world.height - canvas.height);
+        }
+
+        function updatePlayerBullets(delta) {
+            for (let i = playerBullets.length - 1; i >= 0; i--) {
+                const bullet = playerBullets[i];
+                bullet.x += bullet.vx * delta;
+                bullet.y += bullet.vy * delta;
+
+                if (bullet.y + bullet.radius < 0) {
+                    playerBullets.splice(i, 1);
+                    continue;
+                }
+
+                if (collidesWithObstacles(circleBounds(bullet))) {
+                    playerBullets.splice(i, 1);
+                    continue;
+                }
+
+                let consumed = false;
+
+                infantry.forEach((soldier) => {
+                    if (!soldier.alive || consumed) return;
+                    if (circleRectCollision(bullet, soldier)) {
+                        soldier.alive = false;
+                        playerBullets.splice(i, 1);
+                        consumed = true;
+                    }
+                });
+                if (consumed) continue;
+
+                if (armoredCar.alive && circleRectCollision(bullet, armoredCar)) {
+                    armoredCar.hp -= 1;
+                    if (armoredCar.hp <= 0) {
+                        armoredCar.alive = false;
+                    }
+                    playerBullets.splice(i, 1);
+                    continue;
+                }
+
+                if (tank.alive && circleRectCollision(bullet, tank)) {
+                    playerBullets.splice(i, 1);
+                    continue;
+                }
+
+                if (base.alive && circleRectCollision(bullet, baseRect())) {
+                    base.hp -= 1;
+                    if (base.hp <= 0) {
+                        base.alive = false;
+                        stageClear = true;
+                    }
+                    playerBullets.splice(i, 1);
+                }
+            }
+        }
+
+        function updateGrenades(delta) {
+            for (let i = grenades.length - 1; i >= 0; i--) {
+                const grenade = grenades[i];
+                grenade.fuse -= delta;
+
+                if (!grenade.grounded) {
+                    grenade.vy += grenadeConfig.gravity * delta;
+                    grenade.x += grenade.vx * delta;
+                    grenade.y += grenade.vy * delta;
+
+                    if (grenade.y + grenade.radius >= world.height) {
+                        grenade.y = world.height - grenade.radius;
+                        grenade.vy = 0;
+                        grenade.grounded = true;
+                    }
+
+                    const hitObstacle = obstacles.find((obstacle) => circleRectCollision(grenade, obstacle));
+                    if (hitObstacle) {
+                        grenade.y = hitObstacle.y - grenade.radius;
+                        grenade.vy = 0;
+                        grenade.grounded = true;
+                    }
+                }
+
+                if (grenade.fuse <= 0) {
+                    triggerExplosion(grenade.x, grenade.y);
+                    grenades.splice(i, 1);
+                }
+            }
+        }
+
+        function updateExplosions(delta) {
+            for (let i = explosions.length - 1; i >= 0; i--) {
+                const explosion = explosions[i];
+                explosion.elapsed += delta;
+                const progress = clamp(explosion.elapsed / explosion.duration, 0, 1);
+                explosion.radius = explosion.baseRadius + (explosion.maxRadius - explosion.baseRadius) * progress;
+                if (explosion.elapsed >= explosion.duration) {
+                    explosions.splice(i, 1);
+                }
+            }
+        }
+
+        function updateInfantry(delta, timestamp) {
+            infantry.forEach((soldier) => {
+                if (!soldier.alive) {
+                    return;
+                }
+
+                const dx = centerX(player) - centerX(soldier);
+                const dy = centerY(player) - centerY(soldier);
+                const distance = Math.hypot(dx, dy);
+                const engaged = distance <= soldier.detectionRadius;
+
+                if (!engaged) {
+                    soldier.x += soldier.speed * soldier.direction * delta;
+                    if (soldier.x <= soldier.patrolRange.min) {
+                        soldier.x = soldier.patrolRange.min;
+                        soldier.direction = 1;
+                    }
+                    if (soldier.x + soldier.width >= soldier.patrolRange.max) {
+                        soldier.x = soldier.patrolRange.max - soldier.width;
+                        soldier.direction = -1;
+                    }
+                    soldier.fireTimer = 0;
+                    return;
+                }
+
+                soldier.fireTimer -= delta;
+                if (soldier.fireTimer <= 0) {
+                    const len = Math.hypot(dx, dy) || 1;
+                    const speed = 200;
+                    enemyBullets.push({
+                        x: centerX(soldier),
+                        y: centerY(soldier),
+                        radius: 4,
+                        vx: (dx / len) * speed,
+                        vy: (dy / len) * speed
+                    });
+                    soldier.fireTimer = soldier.shootInterval;
+                }
+            });
+        }
+
+        function updateArmoredCar(delta) {
+            if (!armoredCar.alive) {
+                return;
+            }
+
+            armoredCar.x += armoredCar.speed * armoredCar.direction * delta;
+            if (armoredCar.x <= armoredCar.patrolRange.min) {
+                armoredCar.x = armoredCar.patrolRange.min;
+                armoredCar.direction = 1;
+            }
+            if (armoredCar.x + armoredCar.width >= armoredCar.patrolRange.max) {
+                armoredCar.x = armoredCar.patrolRange.max - armoredCar.width;
+                armoredCar.direction = -1;
+            }
+        }
+
+        function updateEnemyBullets(delta) {
+            for (let i = enemyBullets.length - 1; i >= 0; i--) {
+                const bullet = enemyBullets[i];
+                bullet.x += bullet.vx * delta;
+                bullet.y += bullet.vy * delta;
+
+                if (bullet.y - bullet.radius > world.height || bullet.y + bullet.radius < 0) {
+                    enemyBullets.splice(i, 1);
+                    continue;
+                }
+
+                if (collidesWithObstacles(circleBounds(bullet))) {
+                    enemyBullets.splice(i, 1);
+                    continue;
+                }
+
+                if (circleRectCollision(bullet, player) && player.invulnerable === 0) {
+                    player.health -= 1;
+                    player.invulnerable = 1.0;
+                    enemyBullets.splice(i, 1);
+                    if (player.health <= 0) {
+                        gameOver = true;
+                    }
+                }
+            }
+        }
+
+        function triggerExplosion(x, y) {
+            explosions.push({
+                x,
+                y,
+                radius: grenadeConfig.explosionRadius * 0.3,
+                baseRadius: grenadeConfig.explosionRadius * 0.3,
+                maxRadius: grenadeConfig.explosionRadius,
+                duration: 0.3,
+                elapsed: 0
+            });
+
+            applyExplosionDamage(x, y, grenadeConfig.explosionRadius);
+        }
+
+        function applyExplosionDamage(x, y, radius) {
+            const explosion = { x, y, radius };
+
+            infantry.forEach((soldier) => {
+                if (!soldier.alive) return;
+                if (circleRectCollision(explosion, soldier)) {
+                    soldier.alive = false;
+                }
+            });
+
+            if (armoredCar.alive && circleRectCollision(explosion, armoredCar)) {
+                armoredCar.hp -= 3;
+                if (armoredCar.hp <= 0) {
+                    armoredCar.alive = false;
+                }
+            }
+
+            if (tank.alive && circleRectCollision(explosion, tank)) {
+                tank.alive = false;
+            }
+
+            if (base.alive && circleRectCollision(explosion, baseRect())) {
+                base.hp -= 4;
+                if (base.hp <= 0) {
+                    base.alive = false;
+                    stageClear = true;
+                }
+            }
+        }
+
+        function checkStageState() {
+            if (base.alive) {
+                return;
+            }
+            stageClear = true;
+        }
+
+        // -------------------------------------------------------------
+        // Drawing
+        // -------------------------------------------------------------
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            drawBattlefield();
+            drawTerrain();
+            drawBase();
+            drawTank();
+            drawArmoredCar();
+            drawInfantry();
+            drawPlayer();
+            drawPlayerBullets();
+            drawGrenades();
+            drawEnemyBullets();
+            drawExplosions();
+            drawHUD();
+
+            if (stageClear) {
+                drawStageClear();
+            } else if (gameOver) {
+                drawGameOver();
+            }
+        }
+
+        function drawBattlefield() {
+            ctx.fillStyle = '#0c2a0c';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // faint track down the center to guide the player
+            ctx.fillStyle = '#173d17';
+            ctx.fillRect(canvas.width / 2 - 30, -camera.y % canvas.height - canvas.height, 60, canvas.height);
+            ctx.fillRect(canvas.width / 2 - 30, -camera.y % canvas.height, 60, canvas.height * 2);
+        }
+
+        function drawTerrain() {
+            ctx.fillStyle = '#3d2f18';
+            ctx.strokeStyle = '#6b5b2a';
+            ctx.lineWidth = 2;
+            obstacles.forEach((obstacle) => {
+                const screenY = obstacle.y - camera.y;
+                ctx.fillRect(obstacle.x, screenY, obstacle.width, obstacle.height);
+                ctx.strokeRect(obstacle.x, screenY, obstacle.width, obstacle.height);
+            });
+        }
+
+        function drawPlayer() {
+            const screenY = player.y - camera.y;
+            ctx.fillStyle = player.invulnerable > 0 ? '#ffe066' : '#d0d06c';
+            ctx.fillRect(player.x, screenY, player.width, player.height);
+            ctx.fillStyle = '#8f8f3b';
+            ctx.fillRect(player.x + 8, screenY + 8, player.width - 16, player.height - 16);
+        }
+
+        function drawInfantry() {
+            ctx.fillStyle = '#3a6ea5';
+            infantry.forEach((soldier) => {
+                if (!soldier.alive) return;
+                const screenY = soldier.y - camera.y;
+                ctx.fillRect(soldier.x, screenY, soldier.width, soldier.height);
+                ctx.fillStyle = '#24476d';
+                ctx.fillRect(soldier.x + 4, screenY + 6, soldier.width - 8, soldier.height - 12);
+                ctx.fillStyle = '#3a6ea5';
+            });
+        }
+
+        function drawTank() {
+            if (!tank.alive) {
+                drawWreckage(tank.x, tank.y, tank.width, tank.height);
+                return;
+            }
+            const screenY = tank.y - camera.y;
+            ctx.fillStyle = '#555';
+            ctx.fillRect(tank.x, screenY, tank.width, tank.height);
+            ctx.fillStyle = '#333';
+            ctx.fillRect(tank.x + 6, screenY + 6, tank.width - 12, tank.height - 12);
+            ctx.fillStyle = '#777';
+            ctx.fillRect(centerX(tank) - tank.turretWidth / 2, screenY - tank.turretLength + 6, tank.turretWidth, tank.turretLength);
+        }
+
+        function drawArmoredCar() {
+            if (!armoredCar.alive) {
+                drawWreckage(armoredCar.x, armoredCar.y, armoredCar.width, armoredCar.height);
+                return;
+            }
+            const screenY = armoredCar.y - camera.y;
+            ctx.fillStyle = '#8c5f2b';
+            ctx.fillRect(armoredCar.x, screenY, armoredCar.width, armoredCar.height);
+            ctx.fillStyle = '#633f1c';
+            ctx.fillRect(armoredCar.x + 4, screenY + 6, armoredCar.width - 8, armoredCar.height - 12);
+            ctx.fillStyle = '#b3863b';
+            ctx.fillRect(armoredCar.x + armoredCar.width / 2 - 2, screenY - 12, 4, 12);
+        }
+
+        function drawBase() {
+            const screenY = base.y - camera.y;
+            if (!base.alive) {
+                drawWreckage(base.x, base.y, base.width, base.height);
+                return;
+            }
+            ctx.fillStyle = '#8d2f2f';
+            ctx.fillRect(base.x, screenY, base.width, base.height);
+            ctx.strokeStyle = '#ffb3b3';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(base.x, screenY, base.width, base.height);
+            ctx.fillStyle = '#ffdd55';
+            ctx.fillRect(base.x + base.width / 2 - 2, screenY - 40, 4, 40);
+            ctx.beginPath();
+            ctx.arc(base.x + base.width / 2 + 14, screenY - 34, 10, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        function drawPlayerBullets() {
+            ctx.fillStyle = '#ffe066';
+            playerBullets.forEach((bullet) => {
+                const screenY = bullet.y - camera.y;
+                ctx.beginPath();
+                ctx.arc(bullet.x, screenY, bullet.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function drawEnemyBullets() {
+            ctx.fillStyle = '#ff6666';
+            enemyBullets.forEach((bullet) => {
+                const screenY = bullet.y - camera.y;
+                ctx.beginPath();
+                ctx.arc(bullet.x, screenY, bullet.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function drawGrenades() {
+            ctx.fillStyle = '#bbbbbb';
+            grenades.forEach((grenade) => {
+                const screenY = grenade.y - camera.y;
+                ctx.beginPath();
+                ctx.arc(grenade.x, screenY, grenade.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function drawExplosions() {
+            ctx.fillStyle = 'rgba(255, 180, 70, 0.35)';
+            explosions.forEach((explosion) => {
+                const screenY = explosion.y - camera.y;
+                ctx.beginPath();
+                ctx.arc(explosion.x, screenY, explosion.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function drawWreckage(x, y, width, height) {
+            const screenY = y - camera.y;
+            ctx.fillStyle = '#2a2a2a';
+            ctx.fillRect(x, screenY, width, height);
+            ctx.fillStyle = '#444';
+            ctx.fillRect(x + 6, screenY + 6, width - 12, height - 12);
+        }
+
+        function drawHUD() {
+            ctx.fillStyle = '#fff';
+            ctx.font = '16px "Segoe UI", Arial, sans-serif';
+            ctx.textAlign = 'left';
+            ctx.fillText(`Health: ${Math.max(player.health, 0)}`, 16, 24);
+            ctx.fillText(`Armored Car HP: ${armoredCar.alive ? armoredCar.hp : 0}`, 16, 48);
+            ctx.fillText('Controls: WASD move, Space shoot, G grenade', 16, canvas.height - 20);
+        }
+
+        function drawStageClear() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#fff';
+            ctx.font = '36px "Segoe UI", Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('STAGE CLEAR', canvas.width / 2, canvas.height / 2 - 12);
+            ctx.font = '20px "Segoe UI", Arial, sans-serif';
+            ctx.fillText('Enemy base destroyed!', canvas.width / 2, canvas.height / 2 + 20);
+        }
+
+        function drawGameOver() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#ff6666';
+            ctx.font = '36px "Segoe UI", Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('MISSION FAILED', canvas.width / 2, canvas.height / 2 - 12);
+            ctx.font = '20px "Segoe UI", Arial, sans-serif';
+            ctx.fillText('Press refresh to retry', canvas.width / 2, canvas.height / 2 + 20);
+        }
+
+        // -------------------------------------------------------------
+        // Helper utilities
+        // -------------------------------------------------------------
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
+        }
+
+        function circleRectCollision(circle, rect) {
+            const closestX = clamp(circle.x, rect.x, rect.x + rect.width);
+            const closestY = clamp(circle.y, rect.y, rect.y + rect.height);
+            const dx = circle.x - closestX;
+            const dy = circle.y - closestY;
+            return dx * dx + dy * dy <= circle.radius * circle.radius;
+        }
+
+        function collidesWithObstacles(rect) {
+            return obstacles.some((obstacle) => rectIntersect(rect, obstacle));
+        }
+
+        function rectIntersect(a, b) {
+            return (
+                a.x < b.x + b.width &&
+                a.x + a.width > b.x &&
+                a.y < b.y + b.height &&
+                a.y + a.height > b.y
+            );
+        }
+
+        function baseRect() {
+            return { x: base.x, y: base.y, width: base.width, height: base.height };
+        }
+
+        function centerX(rect) {
+            return rect.x + rect.width / 2;
+        }
+
+        function centerY(rect) {
+            return rect.y + rect.height / 2;
+        }
+
+        function circleBounds(circle) {
+            return {
+                x: circle.x - circle.radius,
+                y: circle.y - circle.radius,
+                width: circle.radius * 2,
+                height: circle.radius * 2
+            };
+        }
+
+        // -------------------------------------------------------------
+        // Entry point
+        // -------------------------------------------------------------
+        init();
+    </script>
+</body>
+</html>
