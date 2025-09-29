@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Taito Frontline Clone - Prototype</title>
+    <title>Taito Frontline Clone Prototype</title>
     <style>
-        /* Basic page styling */
+        /* Center the canvas on a dark background */
         html, body {
             margin: 0;
             height: 100%;
-            background-color: #000;
-            font-family: Arial, Helvetica, sans-serif;
+            background: #000;
             color: #fff;
+            font-family: 'Segoe UI', Arial, sans-serif;
         }
 
         body {
@@ -20,496 +20,245 @@
             justify-content: center;
         }
 
-        .game-wrapper {
-            position: relative;
-        }
-
         canvas {
             border: 2px solid #fff;
-            background-color: #0d0d0d;
-        }
-
-        #message {
-            position: absolute;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 100%;
-            text-align: center;
-            font-size: 24px;
-            letter-spacing: 2px;
-            pointer-events: none;
-        }
-
-        #hud {
-            position: absolute;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            text-align: center;
-            font-size: 14px;
-            color: #ccc;
-            pointer-events: none;
+            background: #111;
         }
     </style>
 </head>
 <body>
-    <div class="game-wrapper">
-        <div id="message"></div>
-        <div id="hud"></div>
-        <canvas id="gameCanvas" width="400" height="600"></canvas>
-    </div>
+    <canvas id="gameCanvas" width="480" height="640"></canvas>
 
     <script>
-        // ---------------------------------------------------------------------
-        // Canvas setup
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------
+        // Core setup
+        // -------------------------------------------------------------
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
-        const messageEl = document.getElementById('message');
-        const hudEl = document.getElementById('hud');
 
-        const world = {
-            width: canvas.width,
-            height: 1600
-        };
-
-        // ---------------------------------------------------------------------
-        // Game objects and state
-        // ---------------------------------------------------------------------
-        const player = {
-            width: 24,
-            height: 24,
-            x: canvas.width / 2 - 12,
-            y: world.height - 120,
-            speed: 3.1
-        };
-
-        const camera = {
-            y: world.height - canvas.height
-        };
-
-        const infantryUnits = [
-            createInfantry(canvas.width / 2 - 20, world.height - 360, 110),
-            createInfantry(80, world.height - 720, 140),
-            createInfantry(canvas.width - 100, world.height - 960, 100)
-        ];
-
-        const armoredCar = {
-            width: 34,
-            height: 20,
-            x: canvas.width / 2 - 60,
-            y: world.height - 520,
-            speed: 1.6,
-            direction: 1,
-            patrolRange: 90,
-            originX: canvas.width / 2 - 60,
-            health: 3,
-            alive: true
-        };
-
-        const tank = {
-            width: 44,
-            height: 28,
-            x: canvas.width / 2 - 22,
-            y: world.height - 1120,
-            turretLength: 18,
-            health: 2,
-            alive: true
-        };
-
-        const flag = {
-            width: 14,
-            height: 14,
-            x: canvas.width / 2 - 7,
-            y: 80
-        };
-
-        const obstacles = [
-            { x: 40, y: world.height - 260, width: 80, height: 28 },
-            { x: canvas.width - 140, y: world.height - 600, width: 120, height: 32 },
-            { x: 60, y: world.height - 860, width: 90, height: 26 },
-            { x: canvas.width - 160, y: world.height - 1180, width: 120, height: 32 }
-        ];
-
-        const barricades = [
-            { x: canvas.width / 2 - 80, y: world.height - 1400, width: 160, height: 18 }
-        ];
-
-        const bullets = [];
-        const grenades = [];
-        const keys = {};
-        let lastShotTime = 0;
-        let lastGrenadeTime = 0;
+        const keys = new Set();
+        let lastTime = 0;
         let stageClear = false;
 
-        // ---------------------------------------------------------------------
-        // Input handling
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------
+        // Game object definitions
+        // -------------------------------------------------------------
+        const player = {
+            width: 32,
+            height: 32,
+            x: canvas.width / 2 - 16,
+            y: canvas.height - 60,
+            speed: 180
+        };
+
+        const enemy = {
+            width: 32,
+            height: 32,
+            x: 80,
+            y: 160,
+            speed: 80,
+            direction: 1,
+            patrolRange: { min: 80, max: canvas.width - 112 },
+            alive: true
+        };
+
+        const base = {
+            size: 48,
+            x: canvas.width / 2 - 24,
+            y: 40,
+            alive: true
+        };
+
+        const bullets = [];
+        const bulletConfig = {
+            radius: 5,
+            speed: 300,
+            cooldown: 200
+        };
+        let lastShot = 0;
+
+        // -------------------------------------------------------------
+        // Event listeners
+        // -------------------------------------------------------------
         window.addEventListener('keydown', (event) => {
-            keys[event.code] = true;
+            keys.add(event.code);
         });
 
         window.addEventListener('keyup', (event) => {
-            keys[event.code] = false;
+            keys.delete(event.code);
         });
 
-        // ---------------------------------------------------------------------
-        // Utility collision helpers
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------
+        // Game loop
+        // -------------------------------------------------------------
+        function gameLoop(timestamp) {
+            const delta = (timestamp - lastTime) / 1000; // Convert to seconds
+            lastTime = timestamp;
 
-        /**
-         * Clamp value to a given min/max range.
-         */
-        function clamp(value, min, max) {
-            return Math.max(min, Math.min(max, value));
+            update(delta, timestamp);
+            draw();
+
+            requestAnimationFrame(gameLoop);
         }
 
-        /**
-         * Circle to rectangle collision detection.
-         */
-        function circleRectCollision(circle, rect) {
-            const closestX = clamp(circle.x, rect.x, rect.x + rect.width);
-            const closestY = clamp(circle.y, rect.y, rect.y + rect.height);
-            const dx = circle.x - closestX;
-            const dy = circle.y - closestY;
-            return dx * dx + dy * dy < circle.radius * circle.radius;
-        }
-
-        // ---------------------------------------------------------------------
-        // Game logic
-        // ---------------------------------------------------------------------
-        function update(deltaTime) {
+        // -------------------------------------------------------------
+        // Update logic
+        // -------------------------------------------------------------
+        function update(delta, timestamp) {
             if (stageClear) {
                 return;
             }
 
-            handlePlayerMovement();
-            handleShooting(deltaTime);
-            handleGrenades(deltaTime);
-            updateBullets();
-            updateGrenades(deltaTime);
-            updateInfantry(deltaTime);
-            updateArmoredCar(deltaTime);
-            updateCamera();
-            resolveBulletCollisions();
-            resolveGrenadeCollisions();
-            checkPlayerFlag();
-            updateHud();
+            handlePlayerMovement(delta);
+            handleShooting(timestamp);
+            updateBullets(delta);
+            updateEnemy(delta);
+            handleCollisions();
         }
 
-        function handlePlayerMovement() {
-            let dx = 0;
-            let dy = 0;
+        function handlePlayerMovement(delta) {
+            let moveX = 0;
+            let moveY = 0;
 
-            if (keys['KeyA']) dx -= 1;
-            if (keys['KeyD']) dx += 1;
-            if (keys['KeyW']) dy -= 1;
-            if (keys['KeyS']) dy += 1;
+            if (keys.has('KeyA') || keys.has('ArrowLeft')) moveX -= 1;
+            if (keys.has('KeyD') || keys.has('ArrowRight')) moveX += 1;
+            if (keys.has('KeyW') || keys.has('ArrowUp')) moveY -= 1;
+            if (keys.has('KeyS') || keys.has('ArrowDown')) moveY += 1;
 
             // Normalize diagonal movement
-            if (dx !== 0 && dy !== 0) {
-                dx *= Math.SQRT1_2;
-                dy *= Math.SQRT1_2;
+            if (moveX !== 0 && moveY !== 0) {
+                const inv = Math.SQRT1_2;
+                moveX *= inv;
+                moveY *= inv;
             }
 
-            moveWithCollisions(player, dx * player.speed, dy * player.speed);
+            player.x += moveX * player.speed * delta;
+            player.y += moveY * player.speed * delta;
 
-            player.x = clamp(player.x, 0, world.width - player.width);
-            player.y = clamp(player.y, 0, world.height - player.height);
+            // Clamp player inside canvas bounds
+            player.x = clamp(player.x, 0, canvas.width - player.width);
+            player.y = clamp(player.y, 0, canvas.height - player.height);
         }
 
-        function handleShooting(deltaTime) {
-            const shootInterval = 250; // milliseconds between shots
-            if (keys['Space']) {
-                const now = performance.now();
-                if (now - lastShotTime > shootInterval) {
-                    bullets.push({
-                        x: player.x + player.width / 2,
-                        y: player.y,
-                        radius: 4,
-                        speed: 6
-                    });
-                    lastShotTime = now;
-                }
-            }
-        }
-
-        function handleGrenades(deltaTime) {
-            const grenadeInterval = 900;
-            if (keys['KeyG']) {
-                const now = performance.now();
-                if (now - lastGrenadeTime > grenadeInterval) {
-                    grenades.push({
-                        x: player.x + player.width / 2,
-                        y: player.y,
-                        radius: 5,
-                        vy: -4.2,
-                        gravity: 0.18,
-                        exploding: false,
-                        explosionTimer: 0,
-                        handledExplosion: false
-                    });
-                    lastGrenadeTime = now;
-                }
+        function handleShooting(timestamp) {
+            const canShoot = timestamp - lastShot >= bulletConfig.cooldown;
+            if ((keys.has('Space') || keys.has('KeyJ')) && canShoot) {
+                bullets.push({
+                    x: player.x + player.width / 2,
+                    y: player.y,
+                    radius: bulletConfig.radius
+                });
+                lastShot = timestamp;
             }
         }
 
-        function updateBullets() {
+        function updateBullets(delta) {
             for (let i = bullets.length - 1; i >= 0; i--) {
-                bullets[i].y -= bullets[i].speed;
+                bullets[i].y -= bulletConfig.speed * delta;
                 if (bullets[i].y + bullets[i].radius < 0) {
                     bullets.splice(i, 1);
                 }
             }
         }
 
-        function updateGrenades(deltaTime) {
-            for (let i = grenades.length - 1; i >= 0; i--) {
-                const grenade = grenades[i];
+        function updateEnemy(delta) {
+            if (!enemy.alive) return;
 
-                if (grenade.exploding) {
-                    grenade.explosionTimer += deltaTime;
-                    if (grenade.explosionTimer > 250) {
-                        grenades.splice(i, 1);
-                    }
-                    continue;
-                }
+            enemy.x += enemy.speed * enemy.direction * delta;
 
-                grenade.y += grenade.vy;
-                grenade.vy += grenade.gravity;
+            if (enemy.x <= enemy.patrolRange.min) {
+                enemy.x = enemy.patrolRange.min;
+                enemy.direction = 1;
+            }
 
-                if (grenade.vy > 2.4 || grenade.y <= flag.y + flag.height) {
-                    grenade.exploding = true;
-                    grenade.explosionTimer = 0;
-                }
+            if (enemy.x + enemy.width >= enemy.patrolRange.max) {
+                enemy.x = enemy.patrolRange.max - enemy.width;
+                enemy.direction = -1;
             }
         }
 
-        function updateInfantry(deltaTime) {
-            infantryUnits.forEach((unit) => {
-                if (!unit.alive) {
-                    return;
-                }
-                unit.x += unit.speed * unit.direction;
-
-                if (unit.x <= unit.originX - unit.patrolRange ||
-                    unit.x + unit.width >= unit.originX + unit.patrolRange) {
-                    unit.direction *= -1;
-                }
-            });
-        }
-
-        function updateArmoredCar(deltaTime) {
-            if (!armoredCar.alive) {
-                return;
-            }
-
-            armoredCar.x += armoredCar.speed * armoredCar.direction;
-
-            if (armoredCar.x <= armoredCar.originX - armoredCar.patrolRange ||
-                armoredCar.x + armoredCar.width >= armoredCar.originX + armoredCar.patrolRange) {
-                armoredCar.direction *= -1;
-            }
-        }
-
-        function updateCamera() {
-            camera.y = clamp(
-                player.y + player.height / 2 - canvas.height / 2,
-                0,
-                world.height - canvas.height
-            );
-        }
-
-        function resolveBulletCollisions() {
+        function handleCollisions() {
             for (let i = bullets.length - 1; i >= 0; i--) {
                 const bullet = bullets[i];
 
-                if (isBulletBlocked(bullet)) {
+                if (enemy.alive && circleRectCollision(bullet, enemy)) {
+                    enemy.alive = false;
                     bullets.splice(i, 1);
                     continue;
                 }
 
-                let hit = false;
-                infantryUnits.forEach((unit) => {
-                    if (!unit.alive || hit) return;
-                    if (circleRectCollision(bullet, unit)) {
-                        unit.alive = false;
-                        hit = true;
-                    }
-                });
-
-                if (hit) {
+                if (base.alive && circleRectCollision(bullet, baseRect())) {
+                    base.alive = false;
+                    stageClear = true;
                     bullets.splice(i, 1);
-                    continue;
-                }
-
-                if (armoredCar.alive && circleRectCollision(bullet, armoredCar)) {
-                    armoredCar.health -= 1;
-                    if (armoredCar.health <= 0) {
-                        armoredCar.alive = false;
-                    }
-                    bullets.splice(i, 1);
-                    continue;
-                }
-
-                if (tank.alive && circleRectCollision(bullet, tank)) {
-                    bullets.splice(i, 1);
-                    continue;
+                    break;
                 }
             }
         }
 
-        function resolveGrenadeCollisions() {
-            grenades.forEach((grenade) => {
-                if (!grenade.exploding || grenade.handledExplosion) {
-                    return;
-                }
-
-                const explosion = {
-                    x: grenade.x,
-                    y: grenade.y,
-                    radius: 46
-                };
-
-                infantryUnits.forEach((unit) => {
-                    if (!unit.alive) return;
-                    if (circleRectCollision(explosion, unit)) {
-                        unit.alive = false;
-                    }
-                });
-
-                if (armoredCar.alive && circleRectCollision(explosion, armoredCar)) {
-                    armoredCar.alive = false;
-                }
-
-                if (tank.alive && circleRectCollision(explosion, tank)) {
-                    tank.health -= 1;
-                    if (tank.health <= 0) {
-                        tank.alive = false;
-                    }
-                }
-
-                grenade.handledExplosion = true;
-            });
-        }
-
-        function checkPlayerFlag() {
-            if (stageClear) {
-                return;
-            }
-
-            if (rectIntersect(player, flag)) {
-                stageClear = true;
-                messageEl.textContent = 'Stage Clear!';
-            }
-        }
-
-        function updateHud() {
-            const remainingInfantry = infantryUnits.filter((unit) => unit.alive).length;
-            const armoredCarStatus = armoredCar.alive ? `装甲車HP:${armoredCar.health}` : '装甲車: 撃破';
-            const tankStatus = tank.alive ? `戦車HP:${tank.health} (手榴弾のみ有効)` : '戦車: 撃破';
-            hudEl.innerHTML = `兵士: ${remainingInfantry} / ${infantryUnits.length}　|　${armoredCarStatus}　|　${tankStatus}`;
-        }
-
-        // ---------------------------------------------------------------------
-        // Rendering helpers
-        // ---------------------------------------------------------------------
+        // -------------------------------------------------------------
+        // Drawing
+        // -------------------------------------------------------------
         function draw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            ctx.save();
-            ctx.translate(0, -camera.y);
-
-            drawBackground();
-            drawTerrain();
-            drawFlag();
+            drawBattlefield();
+            drawBase();
+            drawEnemy();
             drawPlayer();
-            drawInfantry();
-            drawArmoredCar();
-            drawTank();
             drawBullets();
-            drawGrenades();
 
-            ctx.restore();
-        }
-
-        function drawBackground() {
-            const stripeHeight = 80;
-            for (let y = 0; y < world.height; y += stripeHeight) {
-                ctx.fillStyle = (Math.floor(y / stripeHeight) % 2 === 0) ? '#0f1a0f' : '#162616';
-                ctx.fillRect(0, y, world.width, stripeHeight);
+            if (stageClear) {
+                drawStageClear();
             }
         }
 
-        function drawTerrain() {
-            ctx.fillStyle = '#3a2f1b';
-            obstacles.forEach((obstacle) => {
-                ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
-            });
+        function drawBattlefield() {
+            ctx.fillStyle = '#0c340c';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            ctx.fillStyle = '#4c3a24';
-            barricades.forEach((barricade) => {
-                ctx.fillRect(barricade.x, barricade.y, barricade.width, barricade.height);
-            });
+            ctx.strokeStyle = '#275327';
+            ctx.setLineDash([6, 6]);
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, canvas.height);
+            ctx.lineTo(canvas.width / 2, 0);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        function drawBase() {
+            if (!base.alive) {
+                ctx.fillStyle = '#442222';
+                ctx.fillRect(base.x, base.y, base.size, base.size);
+                return;
+            }
+
+            ctx.fillStyle = '#aa3333';
+            ctx.fillRect(base.x, base.y, base.size, base.size);
+            ctx.strokeStyle = '#ffcccc';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(base.x, base.y, base.size, base.size);
+        }
+
+        function drawEnemy() {
+            if (!enemy.alive) return;
+
+            ctx.fillStyle = '#3a6ea5';
+            ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+            ctx.fillStyle = '#24476d';
+            ctx.fillRect(enemy.x + 6, enemy.y + 6, enemy.width - 12, enemy.height - 12);
         }
 
         function drawPlayer() {
-            ctx.fillStyle = '#4caf50';
+            ctx.fillStyle = '#d0d06c';
             ctx.fillRect(player.x, player.y, player.width, player.height);
-            ctx.fillStyle = '#2e7d32';
-            ctx.fillRect(player.x + player.width / 2 - 3, player.y - 6, 6, 6);
-        }
-
-        function drawInfantry() {
-            ctx.fillStyle = '#f44336';
-            infantryUnits.forEach((unit) => {
-                if (!unit.alive) return;
-                ctx.fillRect(unit.x, unit.y, unit.width, unit.height);
-            });
-        }
-
-        function drawArmoredCar() {
-            if (!armoredCar.alive) return;
-            ctx.fillStyle = '#90a4ae';
-            ctx.fillRect(armoredCar.x, armoredCar.y, armoredCar.width, armoredCar.height);
-            ctx.fillStyle = '#cfd8dc';
-            ctx.fillRect(armoredCar.x + 4, armoredCar.y + 4, armoredCar.width - 8, armoredCar.height - 8);
-        }
-
-        function drawTank() {
-            if (!tank.alive) return;
-            ctx.fillStyle = '#3e4c59';
-            ctx.fillRect(tank.x, tank.y, tank.width, tank.height);
-            ctx.fillStyle = '#2c3944';
-            ctx.fillRect(tank.x + 6, tank.y + 6, tank.width - 12, tank.height - 12);
-            ctx.strokeStyle = '#2c3944';
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            ctx.moveTo(tank.x + tank.width / 2, tank.y + tank.height / 2);
-            ctx.lineTo(tank.x + tank.width / 2, tank.y + tank.height / 2 - tank.turretLength);
-            ctx.stroke();
-        }
-
-        function drawFlag() {
-            ctx.strokeStyle = '#d32f2f';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.moveTo(flag.x + flag.width / 2, flag.y + flag.height + 10);
-            ctx.lineTo(flag.x + flag.width / 2, flag.y - 18);
-            ctx.stroke();
-
-            ctx.fillStyle = '#ffeb3b';
-            ctx.beginPath();
-            ctx.arc(flag.x + flag.width / 2, flag.y - 18, 6, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.fillStyle = '#ffc107';
-            ctx.fillRect(flag.x, flag.y, flag.width, flag.height);
+            ctx.fillStyle = '#a0a04f';
+            ctx.fillRect(player.x + 10, player.y + 8, player.width - 20, player.height - 16);
         }
 
         function drawBullets() {
-            ctx.fillStyle = '#fff';
+            ctx.fillStyle = '#ffff66';
             bullets.forEach((bullet) => {
                 ctx.beginPath();
                 ctx.arc(bullet.x, bullet.y, bullet.radius, 0, Math.PI * 2);
@@ -517,110 +266,46 @@
             });
         }
 
-        function drawGrenades() {
-            grenades.forEach((grenade) => {
-                if (grenade.exploding) {
-                    const progress = Math.min(grenade.explosionTimer / 250, 1);
-                    const radius = 46 * progress;
-                    const alpha = 0.6 * (1 - progress);
-                    ctx.fillStyle = `rgba(255, 183, 77, ${alpha.toFixed(2)})`;
-                    ctx.beginPath();
-                    ctx.arc(grenade.x, grenade.y, radius, 0, Math.PI * 2);
-                    ctx.fill();
-                } else {
-                    ctx.fillStyle = '#ffa726';
-                    ctx.beginPath();
-                    ctx.arc(grenade.x, grenade.y, grenade.radius, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            });
+        function drawStageClear() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#fff';
+            ctx.font = '36px "Segoe UI", Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('STAGE CLEAR', canvas.width / 2, canvas.height / 2);
         }
 
-        // ---------------------------------------------------------------------
-        // Main game loop
-        // ---------------------------------------------------------------------
-        let lastTime = performance.now();
-
-        function gameLoop(currentTime) {
-            const deltaTime = currentTime - lastTime;
-            lastTime = currentTime;
-
-            update(deltaTime);
-            draw();
-
-            requestAnimationFrame(gameLoop);
-        }
-
-        requestAnimationFrame(gameLoop);
-
-        // ---------------------------------------------------------------------
-        // Helper factories and collision utilities
-        // ---------------------------------------------------------------------
-
-        function createInfantry(x, y, patrolRange) {
-            return {
-                width: 20,
-                height: 20,
-                x,
-                y,
-                speed: 1.4,
-                direction: 1,
-                patrolRange,
-                originX: x,
-                alive: true
-            };
-        }
-
-        function moveWithCollisions(entity, dx, dy) {
-            // Horizontal movement
-            entity.x += dx;
-            if (isCollidingWithTerrain(entity)) {
-                entity.x -= dx;
-            }
-
-            // Vertical movement
-            entity.y += dy;
-            if (isCollidingWithTerrain(entity)) {
-                entity.y -= dy;
-            }
-        }
-
-        function isCollidingWithTerrain(rect) {
-            const allTerrain = obstacles.concat(barricades);
-            return allTerrain.some((terrain) => rectIntersect(rect, terrain));
-        }
-
-        function isBulletBlocked(bullet) {
-            const terrain = obstacles.concat(barricades);
-            return terrain.some((rect) => circleRectCollision(bullet, rect));
-        }
-
-        function rectIntersect(a, b) {
-            return (
-                a.x < b.x + b.width &&
-                a.x + a.width > b.x &&
-                a.y < b.y + b.height &&
-                a.y + a.height > b.y
-            );
-        }
-
-        /**
-         * Clamp value to a given min/max range.
-         */
+        // -------------------------------------------------------------
+        // Helpers
+        // -------------------------------------------------------------
         function clamp(value, min, max) {
             return Math.max(min, Math.min(max, value));
         }
 
-        /**
-         * Circle to rectangle collision detection.
-         */
         function circleRectCollision(circle, rect) {
             const closestX = clamp(circle.x, rect.x, rect.x + rect.width);
             const closestY = clamp(circle.y, rect.y, rect.y + rect.height);
             const dx = circle.x - closestX;
             const dy = circle.y - closestY;
-            return dx * dx + dy * dy < circle.radius * circle.radius;
+            return dx * dx + dy * dy <= circle.radius * circle.radius;
         }
+
+        function baseRect() {
+            return { x: base.x, y: base.y, width: base.size, height: base.size };
+        }
+
+        // -------------------------------------------------------------
+        // Entry point
+        // -------------------------------------------------------------
+        function init() {
+            requestAnimationFrame((timestamp) => {
+                lastTime = timestamp;
+                requestAnimationFrame(gameLoop);
+            });
+        }
+
+        init();
     </script>
 </body>
 </html>
