@@ -1,272 +1,156 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Taito Frontline Clone - Prototype</title>
-  <style>
-    html, body {
-      margin: 0;
-      height: 100%;
-      background-color: #000;
-      font-family: Arial, Helvetica, sans-serif;
-      color: #fff;
-    }
-    body {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    canvas {
-      border: 2px solid #fff;
-      background-color: #1a1a1a;
-    }
-    #message {
-      position: absolute;
-      top: 20px;
-      width: 100%;
-      text-align: center;
-      font-size: 24px;
-      letter-spacing: 2px;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>風呂のライン - Frontline Bath Assault</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: #1a1a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Courier New', monospace;
+            color: #fff;
+        }
+        
+        #gameContainer {
+            position: relative;
+            background: #000;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+        }
+        
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+        
+        #hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            color: #0f0;
+            text-shadow: 2px 2px 0 #000;
+            font-size: 14px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        
+        #hud div {
+            margin: 5px 0;
+        }
+        
+        .hud-bar {
+            display: inline-block;
+            width: 100px;
+            height: 12px;
+            background: #333;
+            border: 1px solid #0f0;
+            vertical-align: middle;
+            margin-left: 10px;
+        }
+        
+        .hud-bar-fill {
+            height: 100%;
+            background: #0f0;
+            transition: width 0.2s;
+        }
+        
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 30px;
+            border: 3px solid #0f0;
+            text-align: center;
+            display: none;
+            z-index: 20;
+        }
+        
+        #gameOver h1 {
+            color: #0f0;
+            margin-bottom: 20px;
+            font-size: 36px;
+        }
+        
+        #gameOver button {
+            background: #0f0;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            font-size: 18px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            margin-top: 10px;
+        }
+        
+        #gameOver button:hover {
+            background: #0c0;
+        }
+        
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            right: 10px;
+            color: #888;
+            font-size: 11px;
+            text-align: center;
+        }
+    </style>
 </head>
 <body>
-  <div id="message"></div>
-  <canvas id="gameCanvas" width="400" height="600"></canvas>
-
-  <script>
-    // ---------------------------------------------------------------------
-    // Canvas setup
-    // ---------------------------------------------------------------------
-    const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
-    const messageEl = document.getElementById('message');
-
-    // ---------------------------------------------------------------------
-    // Game objects and state
-    // ---------------------------------------------------------------------
-    const player = {
-      width: 24,
-      height: 24,
-      x: canvas.width / 2 - 12,
-      y: canvas.height - 60,
-      speed: 3
-    };
-
-    const enemy = {
-      width: 24,
-      height: 24,
-      x: canvas.width / 2 - 12,
-      y: 140,
-      speed: 1.5,
-      direction: 1,
-      patrolRange: 120,
-      alive: true,
-      originX: canvas.width / 2 - 12
-    };
-
-    const base = {
-      size: 40,
-      x: canvas.width / 2 - 20,
-      y: 40,
-      health: 5
-    };
-
-    const bullets = [];
-    const keys = {};
-    let lastShotTime = 0;
-    let stageClear = false;
-
-    // ---------------------------------------------------------------------
-    // Input handling
-    // ---------------------------------------------------------------------
-    window.addEventListener('keydown', (event) => {
-      keys[event.code] = true;
-    });
-
-    window.addEventListener('keyup', (event) => {
-      keys[event.code] = false;
-    });
-
-    // ---------------------------------------------------------------------
-    // Utility helpers
-    // ---------------------------------------------------------------------
-    function clamp(value, min, max) {
-      return Math.max(min, Math.min(max, value));
-    }
-
-    function circleRectCollision(circle, rect) {
-      const closestX = clamp(circle.x, rect.x, rect.x + rect.width);
-      const closestY = clamp(circle.y, rect.y, rect.y + rect.height);
-      const dx = circle.x - closestX;
-      const dy = circle.y - closestY;
-      return dx * dx + dy * dy < circle.radius * circle.radius;
-    }
-
-    // ---------------------------------------------------------------------
-    // Game logic
-    // ---------------------------------------------------------------------
-    function update(deltaTime) {
-      if (stageClear) return;
-
-      handlePlayerMovement();
-      handleShooting();
-      updateBullets();
-      updateEnemy();
-      checkCollisions();
-
-      if (base.health <= 0) {
-        stageClear = true;
-        messageEl.textContent = 'Stage Clear';
-      }
-    }
-
-    function handlePlayerMovement() {
-      let dx = 0;
-      let dy = 0;
-
-      if (keys['KeyA'] || keys['ArrowLeft']) dx -= 1;
-      if (keys['KeyD'] || keys['ArrowRight']) dx += 1;
-      if (keys['KeyW'] || keys['ArrowUp']) dy -= 1;
-      if (keys['KeyS'] || keys['ArrowDown']) dy += 1;
-
-      if (dx !== 0 && dy !== 0) {
-        dx *= Math.SQRT1_2;
-        dy *= Math.SQRT1_2;
-      }
-
-      player.x += dx * player.speed;
-      player.y += dy * player.speed;
-
-      player.x = clamp(player.x, 0, canvas.width - player.width);
-      player.y = clamp(player.y, 0, canvas.height - player.height);
-    }
-
-    function handleShooting() {
-      const shootInterval = 250; // ms
-      if (keys['Space']) {
-        const now = performance.now();
-        if (now - lastShotTime > shootInterval) {
-          bullets.push({
-            x: player.x + player.width / 2,
-            y: player.y,
-            radius: 4,
-            speed: 6
-          });
-          lastShotTime = now;
-        }
-      }
-    }
-
-    function updateBullets() {
-      for (let i = bullets.length - 1; i >= 0; i--) {
-        bullets[i].y -= bullets[i].speed;
-        if (bullets[i].y + bullets[i].radius < 0) {
-          bullets.splice(i, 1);
-        }
-      }
-    }
-
-    function updateEnemy() {
-      if (!enemy.alive) return;
-      enemy.x += enemy.speed * enemy.direction;
-
-      if (enemy.x <= enemy.originX - enemy.patrolRange ||
-          enemy.x + enemy.width >= enemy.originX + enemy.patrolRange) {
-        enemy.direction *= -1;
-      }
-    }
-
-    function checkCollisions() {
-      for (let i = bullets.length - 1; i >= 0; i--) {
-        const bullet = bullets[i];
-
-        // Enemy hit
-        if (enemy.alive && circleRectCollision(
-          { x: bullet.x, y: bullet.y, radius: bullet.radius },
-          { x: enemy.x, y: enemy.y, width: enemy.width, height: enemy.height }
-        )) {
-          enemy.alive = false;
-          bullets.splice(i, 1);
-          continue;
-        }
-
-        // Base hit
-        if (circleRectCollision(
-          { x: bullet.x, y: bullet.y, radius: bullet.radius },
-          { x: base.x, y: base.y, width: base.size, height: base.size }
-        )) {
-          base.health = Math.max(0, base.health - 1);
-          bullets.splice(i, 1);
-        }
-      }
-    }
-
-    // ---------------------------------------------------------------------
-    // Rendering
-    // ---------------------------------------------------------------------
-    function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      drawBackground();
-      drawPlayer();
-      drawEnemy();
-      drawBase();
-      drawBullets();
-    }
-
-    function drawBackground() {
-      ctx.fillStyle = '#1a1a1a';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-
-    function drawPlayer() {
-      ctx.fillStyle = '#4caf50';
-      ctx.fillRect(player.x, player.y, player.width, player.height);
-    }
-
-    function drawEnemy() {
-      if (!enemy.alive) return;
-      ctx.fillStyle = '#f44336';
-      ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
-    }
-
-    function drawBase() {
-      ctx.fillStyle = base.health > 0 ? '#ffc107' : '#555';
-      ctx.fillRect(base.x, base.y, base.size, base.size);
-      if (base.health > 0) {
-        ctx.fillStyle = '#fff';
-        const segmentWidth = base.size / base.health;
-        for (let i = 0; i < base.health; i++) {
-          ctx.fillRect(base.x + i * segmentWidth + 1, base.y - 6, segmentWidth - 2, 4);
-        }
-      }
-    }
-
-    function drawBullets() {
-      ctx.fillStyle = '#fff';
-      bullets.forEach((b) => {
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
-        ctx.fill();
-      });
-    }
-
-    // ---------------------------------------------------------------------
-    // Main loop
-    // ---------------------------------------------------------------------
-    let lastTime = performance.now();
-    function gameLoop(currentTime) {
-      const deltaTime = currentTime - lastTime;
-      lastTime = currentTime;
-
-      update(deltaTime);
-      draw();
-
-      requestAnimationFrame(gameLoop);
-    }
-
-    requestAnimationFrame(gameLoop);
-  </script>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        
+        <div id="hud">
+            <div>
+                <span>HP:</span>
+                <div class="hud-bar">
+                    <div class="hud-bar-fill" id="healthBar" style="width: 100%;"></div>
+                </div>
+            </div>
+            <div>
+                <span>弾薬: <span id="ammo">∞</span></span>
+                <span style="margin-left: 20px;">手榴弾: <span id="grenades">5</span></span>
+            </div>
+            <div id="vehicleInfo" style="display: none;">
+                <span>ビークル装甲:</span>
+                <div class="hud-bar">
+                    <div class="hud-bar-fill" id="vehicleBar" style="width: 100%; background: #fa0;"></div>
+                </div>
+            </div>
+            <div>
+                <span>本部まで: <span id="distance">256</span>m</span>
+            </div>
+            <div style="margin-top: 10px; font-size: 12px;">
+                <span>スコア: <span id="score">0</span></span>
+            </div>
+        </div>
+        
+        <div id="gameOver">
+            <h1 id="gameOverTitle">MISSION COMPLETE</h1>
+            <p id="gameOverMessage">本部を制圧しました！</p>
+            <p style="margin-top: 10px;">スコア: <span id="finalScore">0</span></p>
+            <button onclick="location.reload()">再プレイ</button>
+        </div>
+        
+        <div id="instructions">
+            WASD: 移動 | 矢印キー: 砲塔方向(ビークル時) | SPACE: 射撃 | G: 手榴弾 | E: ビークル乗降
+        </div>
+    </div>
+    
+    <script src="game.js"></script>
 </body>
 </html>
